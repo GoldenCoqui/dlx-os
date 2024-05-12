@@ -1,0 +1,1 @@
+dlxsim -x os.dlx.obj -a -u userprog4.dlx.obj

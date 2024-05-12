@@ -1,0 +1,136 @@
+  void
+ProcessSchedule ()
+{
+  PCB           *pcb;
+  int           i, j, n;
+  int           atEndOfQueue = FALSE; // To be used as a boolean value
+  Link          *links[32];
+
+  // The OS exits if there's no runnable process.  This is a feature, not a
+  // bug.  An easy solution to allowing no runnable "user" processes is to
+  // have an "idle" process that's simply an infinite loop.
+  /*  if (QueueEmpty (&runQueue)) {
+      printf ("No runnable processes - exiting!\n");
+      exitsim (); // NEVER RETURNS
+      }*/
+  dbprintf('p', "Entering ProcessSchedule [context switch] with current PCB: %p\n",currentPCB);
+
+  currentPCB->p_quanta++;
+
+  totalQuanta++;
+
+  pcb = ProcessHighestPriority();
+
+  currentPCB->runtime += my_timer_get() - startTime;
+
+  if (currentPCB->p_info == 1) {
+    printf(TIMESTRING1, currentPCB - pcbs);
+    printf(TIMESTRING2, currentPCB->runtime / (float)1000);
+    printf(TIMESTRING3, currentPCB - pcbs, currentPCB->prio);
+  }
+
+  startTime = my_timer_get();
+
+  if (!pcb) {
+    printf ("No runnable processes - exiting!\n");
+    exitsim ();
+  }
+
+  dbprintf('p', "PCB (%p) currentPCB (%p)\n",pcb,currentPCB);
+
+
+  // If last run process is still the highest priority (ie. not asleep/a zombie)
+  if (pcb == currentPCB) {
+    currentPCB->estcpu++;
+
+    QueueRemove (&pcb->l);
+    QueueInsertLast (&runQueue[pcb->runQueueNum], &pcb->l);
+
+    dbprintf('p', "\tProcess quanta: %i estcpu: %i\n",currentPCB->p_quanta,currentPCB->estcpu);
+    if((currentPCB->p_quanta % PROCESS_QUANTA_MAX) == 0) {
+      dbprintf('p', "Recalculating priority of currentPCB\n");
+      currentPCB->prio = PUSER + (currentPCB->estcpu/4) + (2*currentPCB->p_nice);
+      dbprintf('p', "run queue: %i new run queue: %i prio: %i\n",currentPCB->runQueueNum,currentPCB->prio/4,currentPCB->prio);
+
+      currentPCB->runQueueNum = currentPCB->prio/4;
+      QueueRemove(&currentPCB->l);
+      QueueInsertLast(&runQueue[currentPCB->runQueueNum], &currentPCB->l);
+
+      dbprintf('p', "Recalculated priority\n");
+    }
+  }
+
+  if(totalQuanta % TOTAL_QUANTA_MAX == 0) {
+    dbprintf('p', "Full reshuffle\n");
+    // dbprintf('p', "Process quanta exceeded max\n");
+    // Store all the tails of all of the RunQueues
+    for(i = 0; i < 32; i++) {
+      links[i] = QueueLast(&runQueue[i]);
+    }
+    dbprintf('p', "Last links registered\n");
+
+    for(i = 0; i < 32; i++) {
+      //        if(QueueEmpty(&runQueue[i])) atEndOfQueue = TRUE;
+      n = (&runQueue[i])->nitems;
+
+      //        while(!atEndOfQueue) {
+      for (j = 0; j < n; j++) {
+        pcb = (PCB *)((QueueFirst(&runQueue[i]))->object);
+        pcb->estcpu = (int)((((float)2 * pcb->load)/((float)2 * pcb->load + 1)) * pcb->estcpu) + pcb->p_nice;  // Decay the estimated CPU time of all processes
+        pcb->prio = PUSER + (pcb->estcpu/4) + (2 * pcb->p_nice);                            // Recalculate the priority of all processes
+        dbprintf('p', "\tRun queue shift (%p->%d)\n",pcb,pcb->prio);
+
+        dbprintf('p', "At link: %p for last link: %p\n",&pcb->l,links[i]);
+        if(links[i] == &pcb->l || (&pcb->l)->next == NULL) atEndOfQueue = TRUE;
+
+        pcb->runQueueNum = pcb->prio/4;
+        QueueRemove(&pcb->l);
+        QueueInsertLast(&runQueue[pcb->runQueueNum], &pcb->l);
+      }
+    }
+
+    pcb = ProcessHighestPriority();
+    if (currentPCB == pcb) {
+      QueueRemove(&currentPCB->l);
+      QueueInsertLast(&runQueue[currentPCB->runQueueNum], &currentPCB->l);
+    }
+    }
+    //}
+
+    pcb = ProcessHighestPriority();
+
+    //  }
+
+    currentPCB = pcb;
+
+    // currentPCB = ProcessHighestPriority();
+
+    // Move the front of the queue to the end, if it is the running process.
+    /*
+       pcb = (PCB *)((QueueFirst (&runQueue))->object);
+       if (pcb == currentPCB)
+       {
+       QueueRemove (&pcb->l);
+       QueueInsertLast (&runQueue, &pcb->l);
+       }
+
+    // Now, run the one at the head of the queue.
+    pcb = (PCB *)((QueueFirst (&runQueue))->object);
+    currentPCB = pcb;
+    dbprintf ('p',"About to switch to PCB 0x%x,flags=0x%x @ 0x%x\n",
+    pcb, pcb->flags,
+    pcb->sysStackPtr[PROCESS_STACK_IAR]);
+     */
+
+    // Clean up zombie processes here.  This is done at interrupt time
+    // because it can't be done while the process might still be running
+    while (!QueueEmpty (&zombieQueue)) {
+      pcb = (PCB *)(QueueFirst (&zombieQueue)->object);
+      dbprintf ('p', "Freeing zombie PCB 0x%x.\n", pcb);
+      QueueRemove (&pcb->l);
+      ProcessFreeResources (pcb);
+    }
+    // Set the timer so this process gets at most a fixed quantum of time.
+    TimerSet (processQuantum);
+    dbprintf ('p', "Leaving ProcessSchedule (cur=0x%x)\n", currentPCB);
+}
